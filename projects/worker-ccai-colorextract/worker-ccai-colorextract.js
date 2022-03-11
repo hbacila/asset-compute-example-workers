@@ -19,9 +19,10 @@ const path = require('path');
 const { createReadStream } = require('fs');
 const fs = require('fs').promises;
 const FormData = require('form-data');
+const multipart = require('parse-multipart');
 
-const DEFAULT_ANALYZER_ID = "Feature:image-color-histogram:Service-e952f4acd7c2425199b476a2eb459635";
-const DEFAULT_CCAI_ENDPOINT = "https://sensei.adobe.io/services/v1/predict";
+const DEFAULT_ANALYZER_ID = "Feature:cintel-image-classifier:Service-60887e328ded447d86e01122a4f19c58";
+const DEFAULT_CCAI_ENDPOINT = "https://sensei-stage-va6.adobe.io/services/v2/predict";
 
 /**
  * @typedef {Object} Color
@@ -40,26 +41,31 @@ const DEFAULT_CCAI_ENDPOINT = "https://sensei.adobe.io/services/v1/predict";
  */
 function parseColors(response) {
     const colors = [];
-    for (const cas of response.cas_responses) {
-        if (cas.status === 200 && cas.result.response_type === "feature") {
-            for (const r of cas.result.response) {
-                if (r.feature_name === "color") {
-                    for (const value of r.feature_value) {
-                        if (typeof value.feature_value === 'string') {
-                            const [ name, percentage, red, green, blue ] = value.feature_value.split(",");
-                            colors.push({
-                                name,
-                                percentage,
-                                red,
-                                green,
-                                blue
-                            });    
-                        }
-                    }
+    if (response.status == 200) {
+        const body = response.data;
+        const boundary = multipart.getBoundary(response.headers['content-type']);
+        const parts = body.split("--"+boundary); 
+
+        for(const i in parts) {
+            const part = parts[i];
+            if (part.indexOf('Content-Disposition: form-data; name="result"') > 0) {
+                const subParts = part.split('\r\n');
+                const responseJson = JSON.parse(subParts[4]);
+                for (const name in responseJson[0].colors) {
+                    const color = responseJson[0].colors[name];
+                    colors.push({
+                        name,
+                        'percentage': color.coverage,
+                        'red': color.rgb.red,
+                        'green': color.rgb.green,
+                        'blue': color.rgb.blue
+                    });
                 }
+                break;
             }
-        }
+        }    
     }
+
     return colors;
 }
 
@@ -100,6 +106,10 @@ exports.main = worker(async (source, rendition, params) => {
     const endpoint = rendition.instructions.CCAI_ENDPOINT || DEFAULT_CCAI_ENDPOINT;
     console.log("Using analyzer:", analyzer_id);
     console.log("Using endpoint:", endpoint);
+    // console.log("Source:", source);
+    console.log("Stage apiKey:", rendition.instructions.stageApiKey);
+    console.log("Stage token:", rendition.instructions.stageToken);
+    // console.log("Params:", params);
 
     // Make sure that the source file is not empty
     const stats = await fs.stat(source.path);
@@ -108,25 +118,38 @@ exports.main = worker(async (source, rendition, params) => {
     }
 
     // Build parameters to send to Sensei service
-    const ext = path.extname(source.path);
+    const format = "image/" + path.extname(source.path);
     const parameters = {
-        "application-id": "1234",
-        "content-type": "inline",
-        "encoding": ext,
-        "threshold": "0",
-        "top-N": "0",
-        "custom": {},
-        "data": [{
-            "content-id": "0987",
-            "content": "inline-image",
-            "content-type": "inline",
-            "encoding": ext,
-            "threshold": "0",
-            "top-N": "0",
-            "historic-metadata": [],
-            "custom": {"exclude_mask": 1}
-        }]
+        "sensei:name": analyzer_id,
+        "sensei:invocation_mode": "synchronous",
+        "sensei:invocation_batch": false,
+        "sensei:engines": [
+          {
+            "sensei:execution_info": {
+              "sensei:engine": analyzer_id
+            },
+            "sensei:inputs": {
+              "documents": [{
+                  "sensei:multipart_field_name": "infile",
+                  "dc:format": "image/jpg"
+                }]
+            },
+            "sensei:params": {
+              "application-id": "1234",
+              "enable_mask": 0
+            },
+            "sensei:outputs":{
+              "result" : {
+                "sensei:multipart_field_name" : "result",
+                "dc:format": "application/json"
+              }
+            }
+          }
+        ]
     };
+
+    console.log("STRING: ", JSON.stringify(parameters));
+
     if (rendition.instructions.SENSEI_PARAMS) {
         parameters = JSON.parse(rendition.instructions.SENSEI_PARAMS);
         parameters.encoding = ext;
@@ -135,25 +158,19 @@ exports.main = worker(async (source, rendition, params) => {
 
     // Build form to post
     const formData = new FormData();
-    formData.append('file', createReadStream(source.path));
-    formData.append('contentAnalyzerRequests', JSON.stringify({
-        enable_diagnostics: true,
-        requests: [{
-            analyzer_id,
-            parameters
-        }]
-    }));
-
+    formData.append('infile', createReadStream(source.path));
+    formData.append('contentAnalyzerRequests', JSON.stringify(parameters));
+ 
     // Authorization
-    let accessToken = params.auth && params.auth.accessToken;
-    let clientId = params.auth && params.auth.clientId;
+    let accessToken = rendition.instructions.stageToken;
+    let clientId = rendition.instructions.stageApiKey;
     if (process.env.WORKER_TEST_MODE) {
         accessToken = "test-access-token";
         clientId = "test-client-id";
     }
 
     // Execute request
-    const response = await axios({
+    const request = {
         method: 'post',
         url: endpoint,
         data: formData,
@@ -163,11 +180,13 @@ exports.main = worker(async (source, rendition, params) => {
             'cache-control': 'no-cache,no-cache',
             'Content-Type': 'multipart/form-data',
             'x-api-key': clientId,
+            'Prefer': 'respond-async, wait=59'
         }, formData.getHeaders())
-    });
+    };
+    const response = await axios(request);
 
     // Parse, sort, serialize to XMP
-    const colors = parseColors(response.data);
+    const colors = parseColors(response);
     sortColors(colors);
     const xmp = serializeXmp({
         "ccai:colorNames": colors.map(color => `${color.name}, ${toPercentageString(color)}`),
