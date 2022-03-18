@@ -1,0 +1,9 @@
+packages:
+  __APP_PACKAGE__:
+    actions:
+      worker-ccai-custom-classifiers:
+        function: 'worker-ccai-custom-classifiers.js'
+        runtime: 'nodejs:12'
+        web: true
+        annotations:
+          require-adobe-auth: false

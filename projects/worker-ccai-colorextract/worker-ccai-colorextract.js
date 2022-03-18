@@ -106,11 +106,7 @@ exports.main = worker(async (source, rendition, params) => {
     const endpoint = rendition.instructions.CCAI_ENDPOINT || DEFAULT_CCAI_ENDPOINT;
     console.log("Using analyzer:", analyzer_id);
     console.log("Using endpoint:", endpoint);
-    // console.log("Source:", source);
-    console.log("Stage apiKey:", rendition.instructions.stageApiKey);
-    console.log("Stage token:", rendition.instructions.stageToken);
-    // console.log("Params:", params);
-
+ 
     // Make sure that the source file is not empty
     const stats = await fs.stat(source.path);
     if (stats.size === 0) {
@@ -147,8 +143,6 @@ exports.main = worker(async (source, rendition, params) => {
           }
         ]
     };
-
-    console.log("STRING: ", JSON.stringify(parameters));
 
     if (rendition.instructions.SENSEI_PARAMS) {
         parameters = JSON.parse(rendition.instructions.SENSEI_PARAMS);
