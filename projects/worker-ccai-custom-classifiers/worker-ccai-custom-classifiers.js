@@ -33,13 +33,13 @@ const DEFAULT_CCAI_ENDPOINT = "https://ccai-tagging-stage-va7.adobe.io/custom/im
 /**
  * Parse the color feature response
  * 
- * @param {*} response JSON response from Content and Commerce AI service
- * @returns {Color[]} Color features returned by the service
+ * @param {*} result JSON response from Content and Commerce AI service
+ * @returns {Tag[]} Color features returned by the service
  */
-function parseTags(response) {
+function parseTags(result) {
     const tags = [];
-    if (response.result) {
-        for (const tag in response.result[0].tags) {
+    if (result) {
+        for (const tag in result.tags) {
             tags.push({
                 'name': tag.tag,
                 'percentage': tag.confidence
@@ -91,12 +91,22 @@ exports.main = worker(async (source, rendition, params) => {
 
     classifier_ids.forEach(async classifierId => {
         const classifierEndpoint = endpoint.replace('CLASSIFIER_ID', classifierId);
+        const request = {
+            method: 'post',
+            url: classifierEndpoint,
+            headers: headers,
+            data : data,
+            maxRedirects: 0
+        };
         try {
-            const response = await axios.post(classifierEndpoint, data, { headers: headers });
-            console.log("Response:", response);
-            tags = tags.concat(parseTags(JSON.parse(response)));    
-        } catch (e) {
-            console.log("Exception:", e);
+            const response = await axios(request);
+            tags = tags.concat(parseTags(response.data.result[0]));    
+        } catch (error) {
+            if (error.response) {
+                console.log(`Request failed: ${error.response.status} ${error.response.statusText}`);
+                console.log(`x-request-id: ${error.response.headers['x-request-id']}`);
+            }
+            throw new Error(`Failed getting text tags: ${error.response && error.response.status} ${error.response && error.response.statusText}`);
         }
    });
  
