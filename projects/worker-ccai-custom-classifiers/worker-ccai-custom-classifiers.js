@@ -14,39 +14,32 @@
 const { worker, SourceCorruptError } = require('@adobe/asset-compute-sdk');
 const { serializeXmp } = require("@adobe/asset-compute-xmp");
 const axios = require('axios');
-
-const path = require('path');
-const { createReadStream } = require('fs');
 const fs = require('fs').promises;
-const FormData = require('form-data');
-const multipart = require('parse-multipart');
 
-const DEFAULT_CLASSIFIER_IDS = ['10021','10023'];
+const DEFAULT_CLASSIFIER_IDS = ['10021'];
 const DEFAULT_CCAI_ENDPOINT = "https://ccai-tagging-stage-va7.adobe.io/custom/images/v0/classifiers/CLASSIFIER_ID/predict_tags";
 
-/**
- * @typedef {Object} Tag
- * @property {String} name Tag name
- * @property {Number} percentage Coverage percentage (0.0-1.0)
- */
+async function callClassifier(endpoint, classifierId, headers, data) {
+    const classifierEndpoint = endpoint.replace('CLASSIFIER_ID', classifierId);
+    const config = {
+        method: 'post',
+        url: classifierEndpoint,
+        headers: headers,
+        data: data
+    };
 
-/**
- * Parse the color feature response
- * 
- * @param {*} result JSON response from Content and Commerce AI service
- * @returns {Tag[]} Color features returned by the service
- */
-function parseTags(result) {
-    const tags = [];
-    if (result) {
-        for (const tag in result.tags) {
-            tags.push({
-                'name': tag.tag,
-                'percentage': tag.confidence
-            });
+    console.log(config);
+
+    try {
+        const response = await axios(config);
+        return response.data.result[0];    
+    } catch(error) {
+        if (error.response) {
+            console.log(`Request failed: ${error.response.data.message || error.response.data}`);
+            console.log(`x-request-id: ${error.response.headers['x-request-id']}`);
         }
+        throw new Error(`Failed getting custom tags: ${error.response && error.response.status} ${error.response && error.response.statusText}`);
     }
-    return tags;
 }
 
 exports.main = worker(async (source, rendition, params) => {
@@ -72,12 +65,11 @@ exports.main = worker(async (source, rendition, params) => {
 
     // Execute request
     const headers = {
-        'Authorization': `Bearer ${accessToken}`,
-        'cache-control': 'no-cache,no-cache',
-        'Content-Type': 'application-json',
-        'x-api-key': clientId,
         'x-gw-ims-org-id': imsOrgId,
-        'x-gw-dsnpmms-sub-service': 'mmsrt'
+        'x-api-key': clientId,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application-json',
+        'cache-control': 'no-cache,no-cache'
     };
     const data = {
         "threshold": 0,
@@ -87,34 +79,18 @@ exports.main = worker(async (source, rendition, params) => {
             "asset": source.url
         }]
     };
-   const tags = [];
+   let allTags = [];
 
-    classifier_ids.forEach(async classifierId => {
-        const classifierEndpoint = endpoint.replace('CLASSIFIER_ID', classifierId);
-        const request = {
-            method: 'post',
-            url: classifierEndpoint,
-            headers: headers,
-            data : data,
-            maxRedirects: 0
-        };
-        try {
-            const response = await axios(request);
-            tags = tags.concat(parseTags(response.data.result[0]));    
-        } catch (error) {
-            if (error.response) {
-                console.log(`Request failed: ${error.response.status} ${error.response.statusText}`);
-                console.log(`x-request-id: ${error.response.headers['x-request-id']}`);
-            }
-            throw new Error(`Failed getting text tags: ${error.response && error.response.status} ${error.response && error.response.statusText}`);
-        }
-   });
+    for (const idx in classifier_ids) {
+        const tags = await callClassifier(endpoint, classifier_ids[idx], headers, data);
+        allTags = allTags.concat(tags);
+    }
  
    // Serialize to XMP
     const xmp = serializeXmp({
-        "ccai:labels": tags.map(tag => ({
-            "ccai:name": tag.name,
-            "ccai:percentage": tag.percentage
+        "ccai:labels": allTags.map(t => ({
+            "ccai:name": t.tag,
+            "ccai:percentage": t.confidence
         }))
     }, {
         namespaces: {
