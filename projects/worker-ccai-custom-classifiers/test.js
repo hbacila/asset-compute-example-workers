@@ -37,7 +37,7 @@ async function axiosRequest() {
         })
         .catch(function (error) {
             if (error.response) {
-                console.log(`Request failed: ${error.response.data.message}`);
+                console.log(`Request failed: ${error.response.data.message || error.response.data}`);
                 console.log(`x-request-id: ${error.response.headers['x-request-id']}`);
             }
         });

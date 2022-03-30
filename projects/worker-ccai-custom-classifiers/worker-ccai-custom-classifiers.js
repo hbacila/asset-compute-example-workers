@@ -16,7 +16,7 @@ const { serializeXmp } = require("@adobe/asset-compute-xmp");
 const axios = require('axios');
 const fs = require('fs').promises;
 
-const DEFAULT_CLASSIFIER_IDS = ['10021'];
+const DEFAULT_CLASSIFIER_IDS = '10021,10023';
 const DEFAULT_CCAI_ENDPOINT = "https://ccai-tagging-stage-va7.adobe.io/custom/images/v0/classifiers/CLASSIFIER_ID/predict_tags";
 
 async function callClassifier(endpoint, classifierId, headers, data) {
@@ -28,11 +28,9 @@ async function callClassifier(endpoint, classifierId, headers, data) {
         data: data
     };
 
-    console.log(config);
-
     try {
         const response = await axios(config);
-        return response.data.result[0];    
+        return response.data.result[0].tags;    
     } catch(error) {
         if (error.response) {
             console.log(`Request failed: ${error.response.data.message || error.response.data}`);
@@ -44,7 +42,7 @@ async function callClassifier(endpoint, classifierId, headers, data) {
 
 exports.main = worker(async (source, rendition, params) => {
     // Acquire end point and analyzer
-    const classifier_ids = rendition.instructions.CLASSIFIER_IDS || DEFAULT_CLASSIFIER_IDS;
+    const classifier_ids = (rendition.instructions.CLASSIFIER_IDS || DEFAULT_CLASSIFIER_IDS).split(',');
     const endpoint = rendition.instructions.CCAI_ENDPOINT || DEFAULT_CCAI_ENDPOINT;
  
     // Make sure that the source file is not empty
@@ -54,9 +52,9 @@ exports.main = worker(async (source, rendition, params) => {
     }
 
     // Authorization
-    let accessToken = rendition.instructions.stageToken;
-    let clientId = rendition.instructions.stageApiKey;
-    let imsOrgId = rendition.instructions.stageImsOrgId;
+    let accessToken = rendition.instructions.STAGE_TOKEN;
+    let clientId = rendition.instructions.STAGE_API_KEY;
+    let imsOrgId = rendition.instructions.STAGE_IMS_ORG;
     if (process.env.WORKER_TEST_MODE) {
         accessToken = "test-access-token";
         clientId = "test-client-id";
@@ -68,7 +66,7 @@ exports.main = worker(async (source, rendition, params) => {
         'x-gw-ims-org-id': imsOrgId,
         'x-api-key': clientId,
         'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application-json',
+        'Content-Type': 'application/json',
         'cache-control': 'no-cache,no-cache'
     };
     const data = {
